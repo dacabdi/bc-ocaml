@@ -134,45 +134,38 @@ let rec evalExpr (_e: expr) (_q:envQueue): float =
     | Fct(identifier, params) -> raise ( NotImplemented (identifier ^ "Not implemented") )
 
 let evalCode (_code: block) (_q:envQueue): unit = 
-    (* let local = Map.empty (module String) in  *)
+    let local = Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.] in
+    let temp = _q@[local] in
+    List.fold ~init:temp ~f:(fun acc stat -> evalStatement stat acc) _code
+    (* find out how to return unit type with different types *)
+
+        
     (* create the local environment *)
     (* let List.fold (fun ) *)
     (* user fold_left  *)
     (* pop the local environment *)
-    print_endline "Not implemented"
+    print_endline "Not done yet!"
+    (* raise (NotImplemented "Not implemented") *)
     
-let evalStatement (s: statement) (q:envQueue): envQueue =
+let evalStatement (s: statement) (q: envQueue): envQueue =
     match s with 
-        | Assign(_v, _e) -> (
-            (*let value = evalExpr _e, q in
-            let newEnv:env = _v*)
-            q
-        )
-        | If(e, codeT, codeF) -> 
+        | Assign(_v, _e) -> varAssign _v (evalExpr _e q) q
+        | Expr(_e) -> evalExpr _e q |> printf "%F" ; q
+        (*| Return(_e) -> raise (NotImplemented "Not implemented")
+        | If(_, _, _) -> raise (NotImplemented "Not implemented")
             let condition = evalExpr e q in
                 if(condition>0.0) then
                     evalCode codeT q 
                 else
                     evalCode codeF q
-            ;q
-        | _ -> q (*ignore *)
-
-
-
-
-
-
-
-
-
-
-
-
-
+            ; q
+        | While(_, _) -> raise (NotImplemented "Not implemented")
+        | For(_, _, _, _) -> raise (NotImplemented "Not implemented")
+        | FctDef(_, _, _) -> raise (NotImplemented "Not implemented")*)
+        | _ -> q (* ignore *)
 
 
 (* TESTS ------------------------------------------------------------------------------- *)
-
 
 (* varEval test *)
 let%expect_test "test_varEval_globalScope" =
@@ -217,7 +210,6 @@ let%expect_test "test_varEval_empty" = (* should return zero *)
     printf "%F";
     [%expect {| 0. |}]
 
-
 (* ------------------------------------------------------------------------------------- *)
 
 (* varAssign test *)
@@ -247,15 +239,33 @@ let%expect_test "test_varAssign_onCurrentScope" =
     [%expect {| 1. |}]
 
 
-(* ------------------------------------------------------------------------------------- *)
 
 
-(* ------------------------------------------------------------------------------------- *)
+
+(* test for Expr statement *)
+let%expect_test "test_varAssign_onCurrentScope" =
+    let q = [Map.of_alist_exn (module String) ["global1", 0.; "global2", 20.]] in
+    let q = evalStatement (Expr(Num(1.))) q in
+    let _ = varEval "global1" q in (* the test is captured from std out *)
+    print_string ""; (* dummy to return unit *)
+    [%expect {| 1. |}]
+
+(* test for Expr statement *)
+let%expect_test "test_varAssign_onCurrentScope" =
+    let q = [Map.of_alist_exn (module String) ["global1", 0.; "global2", 20.]] in
+    let q = evalStatement (Expr(Op2("+", Num(1.0), Num(1.0)))) q in
+    let _ = varEval "global1" q in (* the test is captured from std out *)
+    print_string ""; (* dummy to return unit *)
+    [%expect {| 2. |}]
+
+
+
+
 
 
 (* Test for Num expression *)
 let%expect_test "evalNum" = 
-    evalExpr (Num 10.0) [] |>
+    evalExpr (Num 10.) [] |>
     printf "%F";
     [%expect {| 10. |}]
 
