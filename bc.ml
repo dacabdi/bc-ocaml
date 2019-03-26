@@ -73,7 +73,7 @@ varEval "scope2_var2" l;;
 *)
 
 let varEval (_v:string) (_q:envQueue): float =
-    match List.rev _q with (* look for value in right most context first *)
+    match _q with (* look for value in right most context first *)
     | [] -> 0.
     | hd :: tl -> ( match Map.find hd _v with
         | Some value -> value
@@ -87,12 +87,12 @@ let varEval (_v:string) (_q:envQueue): float =
             )
         )
     )
-
+    
 let varAssign (_v:string) (_f:float) (_q:envQueue): envQueue =
-    match List.rev _q with
+    match _q with
     | hd :: tl -> ( 
         match Map.find hd _v with
-        | Some _ -> List.rev (Map.set hd ~key:_v ~data:_f :: tl)
+        | Some _ -> Map.set hd ~key:_v ~data:_f :: tl
         | None -> (
         (* is doesn't exist in the right most, put in the leftmost, that is, global *)
             match _q with
@@ -109,8 +109,8 @@ let rec evalExpr (_e: expr) (_q:envQueue): float =
     | Op1(op, e) -> ( (* treat expressions with 1 operand *)
         match op with
         | "-"  -> evalExpr e _q *. -1.
-        | "++" -> evalExpr e _q +. 1.
-        | "--" -> evalExpr e _q -. 1.
+        | "++" -> evalExpr e _q +.  1.
+        | "--" -> evalExpr e _q -.  1.
         | "!"  -> if (compare (evalExpr e _q) 0.)=0 then 1. else 0.
         | _ -> 0.
     )
@@ -131,82 +131,88 @@ let rec evalExpr (_e: expr) (_q:envQueue): float =
         | "||" -> if (compare (evalExpr el _q) 1. = 0 || compare (evalExpr er _q) 1. = 0) then 1. else 0.
         | _ -> 0.
     )
-    | Fct(identifier, params) -> raise ( NotImplemented (identifier ^ "Not implemented") )
+    | Fct(identifier, params) -> raise ( NotImplemented (identifier ^ " Not implemented") )
 
-let evalCode (_code: block) (_q:envQueue): unit = 
-    let local = Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.] in
-    let temp = _q@[local] in
-    List.fold ~init:temp ~f:(fun acc stat -> evalStatement stat acc) _code
-    (* find out how to return unit type with different types *)
 
-        
-    (* create the local environment *)
-    (* let List.fold (fun ) *)
-    (* user fold_left  *)
-    (* pop the local environment *)
-    print_endline "Not done yet!"
-    (* raise (NotImplemented "Not implemented") *)
-    
-let evalStatement (s: statement) (q: envQueue): envQueue =
+
+
+let rec evalCode (_c: block) (_q:envQueue): envQueue =
+    match _q with
+    | [] -> evalCode _c [ Map.of_alist_exn (module String) [] ]
+    | _  -> List.fold ~init:_q ~f:(fun acc stat -> evalStatement stat acc) _c
+
+and evalStatement (s: statement) (q: envQueue): envQueue =
     match s with 
         | Assign(_v, _e) -> varAssign _v (evalExpr _e q) q
         | Expr(_e) -> evalExpr _e q |> printf "%F" ; q
-        (*| Return(_e) -> raise (NotImplemented "Not implemented")
-        | If(_, _, _) -> raise (NotImplemented "Not implemented")
-            let condition = evalExpr e q in
-                if(condition>0.0) then
-                    evalCode codeT q 
-                else
-                    evalCode codeF q
-            ; q
-        | While(_, _) -> raise (NotImplemented "Not implemented")
-        | For(_, _, _, _) -> raise (NotImplemented "Not implemented")
-        | FctDef(_, _, _) -> raise (NotImplemented "Not implemented")*)
+        | If(condition, codeIf, codeElse) -> if compare (evalExpr condition q) 1. = 0 then evalCode codeIf q else evalCode codeElse q
+        (*| Return(_e) -> raise (NotImplemented "Not implemented") *)
+        | While(c, code) -> whileLoop code c q
+        | For(i, c, m, code) -> 
+            let foorLoopEnv = evalStatement i q in (* put initial condition in if neccesary *)
+            forLoop c m code foorLoopEnv
+        (*| FctDef(_, _, _) -> raise (NotImplemented "Not implemented")*)
         | _ -> q (* ignore *)
+
+and whileLoop (c : block) (cond : expr) (q: envQueue) : envQueue =
+    if compare (evalExpr cond q) 1. = 0 then
+        let newQ = evalCode c q in
+            whileLoop c cond newQ;
+    else
+        q
+
+and forLoop (_c: expr) (_m: statement) (code: block) (q: envQueue) : envQueue =
+    if compare (evalExpr _c q) 1. = 0 then
+        let newQ = evalCode code q in (* loop maintenance *)
+        let newQ = evalStatement _m newQ in
+            forLoop _c _m code newQ;
+    else
+        q
+
 
 
 (* TESTS ------------------------------------------------------------------------------- *)
 
+let _test_env = List.rev [ Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.];
+                           Map.of_alist_exn (module String) ["scope1_var1", 11.; "scope1_var2", 21.]; 
+                           Map.of_alist_exn (module String) ["scope2_var1", 12.; "scope2_var2", 22.]]
+
+let _test_shadowed = List.rev [ Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.];
+                                Map.of_alist_exn (module String) ["scope1_var1", 11.; "scope1_var2", 21.]; 
+                                Map.of_alist_exn (module String) ["global1", 22.; "scope2_var2", 22.]]
+
 (* varEval test *)
 let%expect_test "test_varEval_globalScope" =
-    let queue = [ Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.];
-                  Map.of_alist_exn (module String) ["scope1_var1", 11.; "scope1_var2", 21.]; 
-                  Map.of_alist_exn (module String) ["scope2_var1", 12.; "scope2_var2", 22.]] in
-    varEval "global1" queue |>
+    let q = _test_env  in
+    varEval "global1" q |>
     printf "%F";
     [%expect {| 10. |}]
 
 (* varEval test *)
 let%expect_test "test_varEval_currentScope" =
-    let queue = [ Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.];
-                  Map.of_alist_exn (module String) ["scope1_var1", 11.; "scope1_var2", 21.]; 
-                  Map.of_alist_exn (module String) ["scope2_var1", 12.; "scope2_var2", 22.]] in
-    varEval "scope2_var1" queue |>
+    let q = _test_env  in
+    varEval "scope2_var1" q |>
     printf "%F";
     [%expect {| 12. |}]
 
 (* varEval test *)
 let%expect_test "test_varEval_intermediateScope" = (* should return zero *)
-    let queue = [ Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.];
-                  Map.of_alist_exn (module String) ["scope1_var1", 11.; "scope1_var2", 21.]; 
-                  Map.of_alist_exn (module String) ["scope2_var1", 12.; "scope2_var2", 22.]] in
-    varEval "scope1_var1" queue |>
+    let q = _test_env  in
+    varEval "scope1_var1" q |>
     printf "%F";
     [%expect {| 0. |}]
 
 (* varEval test *)
 let%expect_test "test_varEval_shadowedGlobal" = (* should return the local var *)
-    let queue = [ Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.];
-                  Map.of_alist_exn (module String) ["scope1_var1", 11.; "scope1_var2", 21.]; 
-                  Map.of_alist_exn (module String) ["scope2_var1", 12.; "global1", 22.]] in
-    varEval "global1" queue |>
+    let q = _test_shadowed  in
+    varEval "global1" q |>
     printf "%F";
     [%expect {| 22. |}]
 
 (* varEval test *)
 let%expect_test "test_varEval_empty" = (* should return zero *)
-    let queue = [] in
-    varEval "global1" queue |>
+    let q = []  in
+    varEval "global1" q |>
     printf "%F";
     [%expect {| 0. |}]
 
@@ -214,7 +220,7 @@ let%expect_test "test_varEval_empty" = (* should return zero *)
 
 (* varAssign test *)
 let%expect_test "test_varAssign_onEmpty" =
-    let q = [Map.of_alist_exn (module String) []] in
+    let q = [ Map.of_alist_exn (module String) [] ] in
     let q = varAssign "global1" 0.5 q in
     varEval "global1" q |>
     printf "%F";
@@ -222,7 +228,7 @@ let%expect_test "test_varAssign_onEmpty" =
 
 (* varAssign test *)
 let%expect_test "test_varAssign_onGlobalOnly" =
-    let q = [Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.]] in
+    let q = [ Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.] ] in
     let q = varAssign "global2" 0.1 q in
     varEval "global2" q |>
     printf "%F";
@@ -230,9 +236,9 @@ let%expect_test "test_varAssign_onGlobalOnly" =
 
 (* varAssign test *)
 let%expect_test "test_varAssign_onCurrentScope" =
-    let q = [Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.];
-             Map.of_alist_exn (module String) ["scope1_var1", 11.; "scope1_var2", 21.]; 
-             Map.of_alist_exn (module String) ["scope2_var1", 12.; "global1", 22.]] in
+    let q = List.rev [Map.of_alist_exn (module String) ["global1", 10.; "global2", 20.];
+                      Map.of_alist_exn (module String) ["scope1_var1", 11.; "scope1_var2", 21.]; 
+                      Map.of_alist_exn (module String) ["scope2_var1", 12.; "global1", 22.]] in
     let q = varAssign "scope2_var1" 1. q in
     varEval "scope2_var1" q |>
     printf "%F";
@@ -404,6 +410,130 @@ let%expect_test "evalGreaterThanOrEqualNegative" =
     [%expect {| 0. |}]
 
 
+
+(* ------------------------------------------------------------------------------------- *)
+
+let if1: block = [
+    If(
+        Op2(">", Var("v"), Num(10.0)),
+        [Assign("v", Num(1.0))],
+        [] (* no else *)
+    );
+    Expr(Var("v"))
+]
+
+let%expect_test "blockIf_negative_condition" = 
+    let c = [Assign("v", Num(5.))]@if1 in
+    let _ = evalCode c [] in
+    [%expect {| 5. |}]
+
+let%expect_test "blockIf_positive_condition" = 
+    let c = [Assign("v", Num(20.))]@if1 in
+    let _ = evalCode c [] in
+    [%expect {| 1. |}]
+
+
+
+
+let ifelse1: block = [
+    If(
+        (* if *) Op2(">", Var("v"), Num(10.0)),
+        (* then *) [Assign("v", Num(1.))],
+        (* else *) [Assign("v", Num(100.))] 
+    );
+    Expr(Var("v"))
+]
+
+let%expect_test "blockIfElse_goIf" = 
+    let c = [Assign("v", Num(20.))]@ifelse1 in
+    let _ = evalCode c [] in
+    [%expect {| 1. |}]
+
+let%expect_test "blockIfElse_goElse" = 
+    let c = [Assign("v", Num(5.))]@ifelse1 in
+    let _ = evalCode c [] in
+    [%expect {| 100. |}]
+
+
+
+let while1: block = [
+    Assign("counter", Num(5.));
+    While(Op2("<", Var("counter"), Num(10.0)),
+         [
+             Assign("v", Op2("+", Var("v"), Num(1.)));
+             Assign("counter", Op2("+", Var("counter"), Num(1.)));
+         ]);
+    Expr(Var("v"))
+]
+
+let while2: block = [
+    Assign("counter", Num(0.));
+    While(Op2("<", Var("counter"), Num(10.0)),
+         [
+             Assign("v", Op2("*", Var("v"), Num(2.)));
+             Assign("counter", Op2("+", Var("counter"), Num(1.)));
+         ]);
+    Expr(Var("v"))
+]
+
+let%expect_test "blockWhile_test1" = 
+    let c = [Assign("v", Num(0.))]@while1 in
+    let _ = evalCode c [] in
+    [%expect {| 5. |}]
+
+let%expect_test "blockWhile_test2" = 
+    let c = [Assign("v", Num(1.))]@while2 in
+    let _ = evalCode c [] in
+    [%expect {| 1024. |}]
+
+
+
+let forloop1: block = [
+    Assign("v", Num(1.));
+    For(Assign("counter", Num(0.)),                                 (* init loop *)
+        Op2("<", Var("counter"), Num(10.0)),                        (* loop condition *)
+        Assign("counter", Op2("+", Var("counter"), Num(1.))),       (* loop maintenance *)
+        [                                                           (* loop body *)
+            Assign("v", Op2("*", Var("v"), Num(2.)));
+        ]);
+    Expr(Var("v"))
+]
+
+let%expect_test "foorLoop_test1" =
+    let _ = evalCode forloop1 [] in
+    [%expect {| 1024. |}]
+
+
+let forloop2_nested: block = [
+    Assign("v", Num(1.));
+    For(Assign("counter_inside", Num(0.)),                                 (* init loop *)
+        Op2("<", Var("counter_inside"), Num(4.0)),                        (* loop condition *)
+        Assign("counter_inside", Op2("+", Var("counter_inside"), Num(1.))),       (* loop maintenance *)
+        [   
+            For(Assign("counter_outside", Num(0.)),                                 (* init loop *)
+            Op2("<", Var("counter_outside"), Num(5.0)),                        (* loop condition *)
+            Assign("counter_outside", Op2("+", Var("counter_outside"), Num(1.))),       (* loop maintenance *)
+            [                                                           (* loop body *)
+                Assign("v", Op2("*", Var("v"), Num(2.)));
+            ]);                                                        (* loop body *)
+        ]);
+    Expr(Var("v"))
+]
+
+let%expect_test "foorLoop_test2_nested" =
+    let _ = evalCode forloop2_nested [] in
+    [%expect {| 1048576. |}]
+
+
+
+
+
+
+let p1: block = [
+    Assign("v", Num(1.0));
+    Expr(Var("v")) 
+]
+
 (* 
     v = 10; 
     v // display v
@@ -414,7 +544,7 @@ let p1: block = [
 ]
 
 let%expect_test "p1" =
-    evalCode p1 []; 
+    let _ = evalCode p1 [] in
     [%expect {| 1. |}]
 
 (*
@@ -427,7 +557,8 @@ let%expect_test "p1" =
         }
     v   // display v
 *)
-let p2: block = [
+
+(*let p2: block = [
     Assign("v", Num(1.0));
     If(
         Op2(">", Var("v"), Num(10.0)), 
@@ -444,9 +575,9 @@ let p2: block = [
     Expr(Var("v"))
 ]
 
-let%expect_test "p1" =
-    evalCode p2 []; 
-    [%expect {| 3628800. |}]
+let%expect_test "p2" =
+    let _ = evalCode p2 [] in
+    [%expect {| 3628800. |}]*)
 
 (*  Fibbonaci sequence
     define f(x) {
@@ -475,12 +606,12 @@ let p3: block =
         Expr(Fct("f", [Num(5.0)]));
     ]
 
-let%expect_test "p3" =
+(*let%expect_test "p3" =
     evalCode p3 []; 
     [%expect {| 
         2. 
         5.      
-    |}]
+    |}]*)
 
 
 
