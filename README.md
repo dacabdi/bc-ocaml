@@ -12,4 +12,8 @@ Variables are stored in the top or the bottom of the environment. If the variabl
 
 In **bc**, a variable and a function with the same name shadow each other when colliding in the global context. That is, a _name_ can only be bound to one of them. Thus, I decided to place them both in the global context. Any scope created on top of the global scope will only allow values to be bound to names.
 
-I considered using the _auto_ construct to provide the functions with locally scoped functions beyond the parameters, my implementation allows it, but ended up avoiding it to maintain the implementation in agreement with the professors' analysis. 
+I considered using the _auto_ construct to provide the functions with locally scoped functions beyond the parameters, my implementation allows it, but ended up avoiding it to maintain the implementation in agreement with the professors' analysis.
+
+### To run ###
+
+Just run `$ dune runtest`
