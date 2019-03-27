@@ -18,18 +18,25 @@ type expr =
     | Fct of string * expr list
 
 type statement = 
+    | Break
+    | Continue
     | Assign of string*expr
     | Return of expr
     | Expr of expr
     | If of expr*statement list * statement list
     | While of expr*statement list
     | For of statement*expr*statement*statement list
-    | FctDef of string * string list * statement list 
+    | FctDef of string * string list * statement list
     | Unkown of string
 
-type bindable = 
+and bindable = 
     | FctBody of string list * statement list
     | Num of float
+
+and env = (string, bindable, String.comparator_witness) Map.t
+and stack = env list
+
+type block = statement list 
 
 exception NotImplemented of string
 exception MissingScope of string
@@ -38,10 +45,10 @@ exception UnkownStatement of string
 exception ParametersMissmatch of string
 
 exception ReturnValue of float
+exception BreakSignal of stack
+exception ContinueSignal of stack
 
-type block = statement list 
-type env = (string, bindable, String.comparator_witness) Map.t
-type stack = env list
+
 
 let defaultExpr : expr = Num(1.0)
 
@@ -88,9 +95,9 @@ let fetchValue (name: string) (env: stack): float =
 
 (* evaluation functions *) 
 
-let rec evalBlock (code: block) (env: stack): stack =
+let rec evalCode (code: block) (env: stack): stack =
     match env with
-    | [] -> evalBlock code [ Map.of_alist_exn (module String) [] ]
+    | [] -> evalCode code [ Map.of_alist_exn (module String) [] ]
     | _  -> List.fold ~init:env ~f:(fun acc stat -> evalStatement stat acc) code
 
 and evalStatement (stat: statement) (env: stack): stack =
@@ -99,13 +106,15 @@ and evalStatement (stat: statement) (env: stack): stack =
         | Expr(exp) -> evalExpr exp env |> printf "%F\n"; env
         | If(cond, codeIf, codeElse) -> 
             if compare (evalExpr cond env) 1. = 0 
-                then evalBlock codeIf env 
-                else evalBlock codeElse env
+                then evalCode codeIf env 
+                else evalCode codeElse env
         | Return(exp) -> raise (ReturnValue (evalExpr exp env))
         | While(cond, code) -> whileLoop cond code env
         | For(init, cond, maint, code) -> 
             let env = evalStatement init env in
             forLoop cond maint code env
+        | Break -> raise (BreakSignal(env))
+        | Continue -> raise (ContinueSignal(env))
         | FctDef(name, params, body) -> bindFunction name (FctBody(params, body)) env
         | Unkown(str) -> raise ( UnkownStatement("Unkown statement: " ^ str))
 
@@ -129,7 +138,7 @@ and evalExpr (exp: expr) (env: stack): float =
         | "-"  -> evalExpr el env -. evalExpr er env
         | "+"  -> evalExpr el env +. evalExpr er env
         | "==" -> if compare(evalExpr el env) (evalExpr er env) = 0 then 1. else 0.
-        | "!=" -> if compare(evalExpr el env) (evalExpr er env) != 0 then 1. else 0.
+        | "!=" -> if compare(evalExpr el env) (evalExpr er env) = 0 then 0. else 1.
         | "<" -> if compare(evalExpr el env) (evalExpr er env) < 0 then 1. else 0.
         | "<=" -> if compare(evalExpr el env) (evalExpr er env) <= 0 then 1. else 0.
         | ">" -> if compare(evalExpr el env) (evalExpr er env) > 0 then 1. else 0.
@@ -142,7 +151,7 @@ and evalExpr (exp: expr) (env: stack): float =
         match fetch name env with 
         | FctBody(params, body) -> (
             let frame = bindArguments params args env@[ Map.of_alist_exn (module String) [] ] in
-            try let _ = evalBlock body frame in 0.
+            try let _ = evalCode body frame in 0.
             with ReturnValue(value) -> value
         )
         | _ -> raise (NotImplemented ("Function " ^ name ^ " not defined"))
@@ -150,15 +159,21 @@ and evalExpr (exp: expr) (env: stack): float =
 
 and whileLoop (cond: expr) (code: block) (env: stack) : stack =
     if compare (evalExpr cond env) 1. = 0 then
-        let newQ = evalBlock code env in
-            whileLoop cond code newQ;
+        try
+            let env = evalCode code env in whileLoop cond code env
+        with 
+            | ContinueSignal(env) -> whileLoop cond code env;
+            | BreakSignal(env) -> env 
     else env
 
 and forLoop (cond: expr) (maint: statement) (code: block) (env: stack) : stack =
     if compare (evalExpr cond env) 1. = 0 then
-        let env = evalBlock code env in
-        let env = evalStatement maint env in
-            forLoop cond maint code env;
+        try
+            let env = evalCode code env in
+            let env = evalStatement maint env in forLoop cond maint code env;
+        with 
+            | ContinueSignal(env) ->  let env = evalStatement maint env in forLoop cond maint code env;
+            | BreakSignal(env) -> env
     else env
 
 and bindArguments (params: string list) (args: expr list) (env: stack) : stack =
@@ -230,7 +245,27 @@ let%expect_test "evalStatement_Assign1" =
 let%expect_test "evalExpr_Num" = 
     evalExpr (Num 10.) [] |> printf "%F";
     [%expect {| 10. |}]
-    
+
+let%expect_test "evalExpr_Op1_ArithmeticNegate" = 
+    evalExpr (Op1 ("-", (Num 2.))) [] |> printf "%F";
+    [%expect {| -2. |}]
+
+let%expect_test "evalExpr_Op1_LogicNegate_True" = 
+    evalExpr (Op1 ("!", (Num 1.))) [] |> printf "%F";
+    [%expect {| 0. |}]
+
+let%expect_test "evalExpr_Op1_LogicNegate_False" = 
+    evalExpr (Op1 ("!", (Num 0.))) [] |> printf "%F";
+    [%expect {| 1. |}]
+
+let%expect_test "evalExpr_Op1_Increment" = 
+    evalExpr (Op1 ("++", (Num 0.))) [] |> printf "%F";
+    [%expect {| 1. |}]
+
+let%expect_test "evalExpr_Op1_Decrement" = 
+    evalExpr (Op1 ("--", (Num 0.))) [] |> printf "%F";
+    [%expect {| -1. |}]
+
 let%expect_test "evalExpr_Op2_Pow" = 
     evalExpr (Op2 ("^", (Num 2.), (Num 3.))) [] |> printf "%F";
     [%expect {| 8. |}]
@@ -344,12 +379,12 @@ let if1: block = [
     Expr(Var("v"))
 ]
 
-let%expect_test "evalBlock_If_positive" =
-    let _ = evalBlock ([Assign("v", Num(5.))]@if1) [] in
+let%expect_test "evalCode_If_positive" =
+    let _ = evalCode ([Assign("v", Num(5.))]@if1) [] in
     [%expect {| 5. |}]
 
-let%expect_test "evalBlock_If_negative" =
-    let _ = evalBlock ([Assign("v", Num(20.))]@if1) [] in
+let%expect_test "evalCode_If_negative" =
+    let _ = evalCode ([Assign("v", Num(20.))]@if1) [] in
     [%expect {| 1. |}]
 
 let ifelse1: block = [
@@ -361,12 +396,12 @@ let ifelse1: block = [
     Expr(Var("v"))
 ]
 
-let%expect_test "evalBlock_IfElse_if" =
-    let _ = evalBlock ([Assign("v", Num(20.))]@ifelse1) [] in
+let%expect_test "evalCode_IfElse_if" =
+    let _ = evalCode ([Assign("v", Num(20.))]@ifelse1) [] in
     [%expect {| 1. |}]
 
-let%expect_test "evalBlock_IfElse_else" =
-    let _ = evalBlock ([Assign("v", Num(5.))]@ifelse1) [] in
+let%expect_test "evalCode_IfElse_else" =
+    let _ = evalCode ([Assign("v", Num(5.))]@ifelse1) [] in
     [%expect {| 100. |}]
 
 let __while_base1: block = [
@@ -377,21 +412,60 @@ let __while_base1: block = [
     Expr(Var("v"))
 ]
 
+let __while_base2: block = [
+    While(Op2("<", Var("counter"), Num(10.0)), [
+             Assign("counter", Op2("+", Var("counter"), Num(1.)));
+             If(Op2(">", Var("counter"), Num(5.0)),
+                [Continue],
+                []);
+             Assign("v", Op2("*", Var("v"), Num(2.)))
+         ]);
+    Expr(Var("v"))
+]
+
+let __while_base3: block = [
+    While(Op2("<", Var("counter"), Num(10.0)), [
+             Assign("counter", Op2("+", Var("counter"), Num(1.)));
+             Expr(Var("v"));
+             If(Op2(">", Var("counter"), Num(5.0)),
+                [Break],
+                []);
+             Assign("v", Op2("*", Var("v"), Num(2.)));
+         ]);
+]
+
 let while1: block = [Assign("v", Num(1.)); Assign("counter", Num(5. ));]@__while_base1
 let while2: block = [Assign("v", Num(1.)); Assign("counter", Num(0. ));]@__while_base1
 let while3: block = [Assign("v", Num(1.)); Assign("counter", Num(10. ));]@__while_base1
+let while4: block = [Assign("v", Num(1.)); Assign("counter", Num(0. ));]@__while_base2
+let while5: block = [Assign("v", Num(1.)); Assign("counter", Num(0. ));]@__while_base3
 
-let%expect_test "evalBlock_While_1" =
-    let _ = evalBlock while1 [] in
+let%expect_test "evalCode_While_1" =
+    let _ = evalCode while1 [] in
     [%expect {| 32. |}]
 
-let%expect_test "evalBlock_While_2" =
-    let _ = evalBlock while2 [] in
+let%expect_test "evalCode_While_2" =
+    let _ = evalCode while2 [] in
     [%expect {| 1024. |}]
 
-let%expect_test "evalBlock_While_condFailsFirst" =
-    let _ = evalBlock while3 [] in
+let%expect_test "evalCode_While_condFailsFirst" =
+    let _ = evalCode while3 [] in
     [%expect {| 1. |}]
+
+let%expect_test "evalCode_While_withContinue" =
+    let _ = evalCode while4 [] in
+    [%expect {| 32. |}]
+
+let%expect_test "evalCode_While_withBreak" =
+    let _ = evalCode while5 [] in
+    [%expect {| 
+                1.
+                2.
+                4.
+                8.
+                16.
+                32. 
+            |}]
 
 
 let forloop1: block = [
@@ -405,8 +479,8 @@ let forloop1: block = [
     Expr(Var("v"))
 ]
 
-let%expect_test "evalBlock_For" =
-    let _ = evalBlock forloop1 [] in
+let%expect_test "evalCode_For" =
+    let _ = evalCode forloop1 [] in
     [%expect {| 1024. |}]
 
 let forloop2_nested: block = [
@@ -425,39 +499,18 @@ let forloop2_nested: block = [
     Expr(Var("v"))
 ]
 
-let%expect_test "evalBlock_For_Nested" =
-    let _ = evalBlock forloop2_nested [] in
+let%expect_test "evalCode_For_Nested" =
+    let _ = evalCode forloop2_nested [] in
     [%expect {| 1048576. |}]
 
-
-let p1: block = [
-    Assign("v", Num(1.0));
-    Expr(Var("v"))
-]
-
-(* 
-    v = 10; 
-    v // display v
- *)
 let p1: block = [
         Assign("v", Num(1.0));
         Expr(Var("v")) 
 ]
 
 let%expect_test "p1" =
-    let _ = evalBlock p1 [] in
+    let _ = evalCode p1 [] in
     [%expect {| 1. |}]
-
-(*
-    v = 1.0;
-    if (v>10.0)
-        v = v + 1.0
-    else
-        for(i=2.0; i<10.0; i++) {
-            v = v * i
-        }
-    v   // display v
-*)
 
 let p2: block = [
     Assign("v", Num(1.0));
@@ -477,7 +530,7 @@ let p2: block = [
 ]
 
 let%expect_test "p2" =
-    let _ = evalBlock p2 [] in
+    let _ = evalCode p2 [] in
     [%expect {| 3628800. |}]
 
 
@@ -493,26 +546,14 @@ let simple_function: block = [
 ]
 
 let%expect_test "Fct_simpleFunction" =
-    let _ = evalBlock simple_function [] in 
+    let _ = evalCode simple_function [] in 
     [%expect {| 
         5.
         25.
         25.
     |}]
 
-(*  Fibbonaci sequence
-    define f(x) {
-        if (x<1.0)
-            return (1.0)
-        else
-            return (f(x-1)+f(x-2))
-    }
-
-    f(3)
-    f(5)
- *)
-
-let p3: block = 
+let fibo30: block = 
     [
         FctDef("f", ["x"], [
             If(
@@ -525,14 +566,14 @@ let p3: block =
         ]);
         For(
             Assign("i", Num(0.)),
-            Op2("<", Var("i"), Num(11.)),
+            Op2("<", Var("i"), Num(30.)),
             Assign("i", Op1("++", Var("i"))), 
             [ Expr(Fct("f", [Var("i")])) ]
         )
     ]
 
-let%expect_test "p3" =
-    let _ = evalBlock p3 [] in 
+let%expect_test "Fct_fibo_rec_from_0_to_30" =
+    let _ = evalCode fibo30 [] in 
     [%expect {|
         1.
         1.
@@ -545,4 +586,25 @@ let%expect_test "p3" =
         34.
         55.
         89.
+        144.
+        233.
+        377.
+        610.
+        987.
+        1597.
+        2584.
+        4181.
+        6765.
+        10946.
+        17711.
+        28657.
+        46368.
+        75025.
+        121393.
+        196418.
+        317811.
+        514229.
+        832040.
     |}]
+
+    
